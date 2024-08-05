@@ -1,0 +1,96 @@
+DEFINE CLASS Trader_GA(Trader):
+    DEFINE FUNCTION __init__(self, ttype, tid, balance, params, time):
+        super().__init__(ttype, tid, balance, params, time)
+        SET self.population_size TO 10
+        SET self.mutation_rate TO 0.1
+        SET self.crossover_rate TO 0.7
+        SET self.generation_time TO 10  # Time after which we evolve a new generation
+        SET self.last_generation_time TO time
+        SET self.population TO self.initialize_population()
+        SET self.best_strategy TO None
+
+    DEFINE FUNCTION initialize_population(self):
+        SET population TO []
+        FOR _ IN range(self.population_size):
+            # Create random strategies and initialize with default fitness
+            SET strategy TO {
+                'price_adjustment_factor': random.uniform(0.95, 1.05), # Random price adjustment factor
+                'threshold': random.uniform(0.01, 0.1), # Random threshold FOR price adjustment
+                'fitness': 0  # Initialize fitness to zero FOR each strategy
+            }
+            population.append(strategy)
+        RETURN population
+
+    DEFINE FUNCTION mutation(self, strategy):
+        IF random.random() < self.mutation_rate:
+            SET key TO random.choice(list(strategy.keys()))
+            IF key EQUALS 'price_adjustment_factor':
+                SET strategy[key] TO random.uniform(0.95, 1.05)
+            ELSEIF key EQUALS 'threshold':
+                SET strategy[key] TO random.uniform(0.01, 0.1)
+        RETURN strategy
+
+    DEFINE FUNCTION crossover(self, parent1, parent2):
+        SET child TO {}
+        FOR key IN parent1:
+            IF random.random() < self.crossover_rate:
+                SET child[key] TO parent1[key]
+            ELSE:
+                SET child[key] TO parent2[key]
+        RETURN child
+
+    DEFINE FUNCTION select_parents(self):
+        # Simple random selection of parents
+        RETURN random.choice(self.population), random.choice(self.population)
+
+    DEFINE FUNCTION getorder(self, time, countdown, lob):
+        IF (time - self.last_generation_time) >= self.generation_time:
+            self.evolve_population()
+            SET self.last_generation_time TO time
+        IF len(self.orders) < 1:
+            RETURN None
+        SET self.best_strategy TO max(self.population, key=lambda x: x['fitness'])
+        SET limit TO self.orders[0].price
+        SET otype TO self.orders[0].otype
+        SET qty TO self.orders[0].qty
+        SET qid TO self.orders[0].qid
+        SET proposed_price TO limit * self.best_strategy['price_adjustment_factor']
+        IF otype EQUALS 'Bid':
+            SET price TO min(proposed_price, limit)
+        ELSEIF otype EQUALS 'Ask':
+            SET price TO max(proposed_price, limit)
+        SET order TO Order(self.tid, otype, price, qty, time, qid)
+        RETURN order
+
+    DEFINE FUNCTION respond(self, time, lob, trade, verbose):
+        # Ensure there is at least one order and a trade to respond to
+        IF trade is not None and len(self.orders) > 0:
+            # Calculate the profit or loss from the trade
+            SET profit TO trade['price'] - self.orders[0].price IF self.orders[0].otype EQUALS 'Bid' else self.orders[0].price - trade['price']
+            # Update fitness of the strategy used IN the last trade
+            IF self.best_strategy IN self.population:
+                SET current_strategy_index TO self.population.index(self.best_strategy)
+                # Ensure the fitness key exists, IF not, initialize it
+                self.population[current_strategy_index].setdefault('fitness', 0)
+                self.population[current_strategy_index]['fitness'] += profit
+
+            # Evolve population IF needed
+            IF time - self.last_generation_time >= self.generation_time:
+                self.evolve_population()
+                SET self.last_generation_time TO time
+        ELSE:
+            IF verbose:
+                OUTPUT("No orders or trade to respond to.")
+
+    DEFINE FUNCTION evolve_population(self):
+        # Rank strategies by their fitness
+        self.population.sort(key=lambda x: x.get('fitness', 0), reverse=True)
+        SET new_population TO []
+        WHILE len(new_population) < self.population_size:
+            SET parent1, parent2 TO self.select_parents()
+            SET child TO self.crossover(parent1, parent2)
+            SET child TO self.mutation(child)
+            # Reset fitness of new child
+            SET child['fitness'] TO 0
+            new_population.append(child)
+        SET self.population TO new_population
